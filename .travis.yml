@@ -1,40 +1,36 @@
 os: linux
 dist: bionic
-language: java
-services:
-  - docker
-  - mysql
-jdk: openjdk11
+language: node_js
+services: docker
+node_js: 16
 addons:
   hosts:
     - mariadb.example.com
 
+
 before_install:
   - git clone https://github.com/mariadb-corporation/connector-test-machine.git
-  # Load cached docker images
-  - if [[ -d $HOME/docker ]]; then ls $HOME/docker/*.tar.gz | xargs -I {file} sh -c "zcat {file} | docker load"; fi
 
-cache:
-  directories:
-    - $HOME/docker
-    - $HOME/.m2
-
-env: local=0
 
 install:
   - |-
     case $TRAVIS_OS_NAME in
       windows)
-        choco install openjdk11 maven
+        choco install -y --force nodejs-lts
+        # force refresh path
         export PATH=$(cmd.exe //c "refreshenv > nul & C:\Progra~1\Git\bin\bash -c 'echo \$PATH' ")
-        connector-test-machine/launch.bat -t "$srv" -v "$v" -d testj
+        connector-test-machine/launch.bat -t "$srv" -v "$v" -d testn
         ;;
       linux)
-        source connector-test-machine/launch.sh -t "$srv" -v "$v" -d testj -n 0 -l "$local" -p "$packet"
+        source connector-test-machine/launch.sh -t "$srv" -v "$v" -d testn -l "$local"
         ;;
     esac
 
+env:
+  global:
+    - RUN_LONG_TEST=1
 jobs:
+  fast_finish: true
   allow_failures:
     - env: srv=build v=10.6
   include:
@@ -44,23 +40,47 @@ jobs:
     - env: srv=mariadb v=10.2 local=1
     - env: srv=mariadb v=10.3 local=1
     - env: srv=mariadb v=10.4 local=1
-    - env: srv=mariadb v=10.6 local=1
-    - env: srv=mariadb v=10.5 packet=40
-    - env: srv=mariadb v=10.5 packet=8
-    - env: srv=mariadb v=10.5 BENCH=1
-    - env: srv=maxscale
-    - env: srv=build v=10.6
-    - env: srv=mysql v=5.7
-    - env: srv=mysql v=8.0
-    - env: srv=skysql
-    - env: srv=skysql-ha
+    - env: srv=mariadb v=10.5 local=1
+    - env: srv=mariadb v=10.5 local=1
+      node_js: 14
+    - env: srv=mariadb v=10.5 local=1
+      node_js: 12
+    - env: srv=mariadb v=10.6 BENCH=1 local=1
+    - if: env(CONNECTOR_TEST_SECRET_KEY)
+      env: srv=maxscale
+    - if: env(CONNECTOR_TEST_SECRET_KEY)
+      env: srv=mariadb-es v=10.5
+    - if: env(CONNECTOR_TEST_SECRET_KEY)
+      env: srv=skysql RUN_LONG_TEST=0
+    - if: env(CONNECTOR_TEST_SECRET_KEY)
+      env: srv=skysql-ha RUN_LONG_TEST=0
+    - if: env(CONNECTOR_TEST_SECRET_KEY)
+      env: srv=build v=10.6
+    - if: env(CONNECTOR_TEST_SECRET_KEY)
+      env: srv=mysql v=5.7
+    - if: env(CONNECTOR_TEST_SECRET_KEY)
+      env: srv=mysql v=8.0
 
 
 script:
-  - mvn clean -Dmaven.test.skip
-  - if [ -n "$BENCH" ] ; then mvn package -P bench -Dmaven.test.skip -Dmaven.javadoc.skip=true ; fi
-  - if [ -n "$BENCH" ] ; then java -Duser.country=US -Duser.language=en -DTEST_PORT=$TEST_DB_PORT -DTEST_HOST=$TEST_DB_HOST -DTEST_USERNAME=$TEST_DB_USER -DTEST_PASSWORD=$TEST_DB_PASSWORD -jar target/benchmarks.jar; fi
-  - if [ -z "$BENCH" ] ; then MAVEN_SKIP_RC=true MAVEN_OPTS="-Xmx2g" mvn clean test -DjobId=${TRAVIS_JOB_ID}; fi
+  - npm install
+  - npm install nyc -g
+  - |-
+    case $TRAVIS_OS_NAME in
+      windows)
+        npm run coverage:test
+        ;;
+      linux)
+        npm run test:lint
+        if [ -n "$BENCH" ] ; then
+          npm install promise-mysql mysql2
+          npm install microtime
+          npm run benchmark
+        else
+          npm run coverage:test
+        fi
+        ;;
+    esac
 
-after_script:
-  - bash <(curl -s https://codecov.io/bash)
+after_success:
+  - if [ -z "$BENCH" ] ; then npm run coverage:report; fi
